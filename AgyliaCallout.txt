@@ -1,0 +1,157 @@
+AgyliaCallout
+public class AgyliaCallout {
+    public static List<API_Call_Error_Log__c> lstAPIErrorLog;
+    public static Map<Id, kugo2p__SalesOrder__c> mapOrders;
+    @future(callout=true)
+    
+    public static void createUser(Set<Id> courseParticipantId) {
+        lstAPIErrorLog = new List<API_Call_Error_Log__c>();
+        mapOrders = new Map<Id, kugo2p__SalesOrder__c>();
+        Set<Id> setOrderIds = new Set<Id>();
+        if(courseParticipantId.size() > 0){
+            
+            List<Course_Participant__c> lstcourseParticipant = new List<Course_Participant__c>([Select Id, First_Name__c, Last_Name__c, Company__c, Email__c, 
+                                                      JJHWS_Unique_ID__c, Timezone__c, Access_Code__c, 
+                                                      Content_Group__c, OrderNumber__c, Coach_1_String_c__c, Coach_2_String__c, Coach_3_String__c  
+                                                      from Course_Participant__c 
+                                                      Where Id in: courseParticipantId]);
+            
+            for(Course_Participant__c courseParticipant : lstcourseParticipant) {
+                if(courseParticipant.OrderNumber__c != null) {
+                    setOrderIds.add(courseParticipant.OrderNumber__c);
+                }
+            }
+            
+            if(setOrderIds.size() > 0) {
+                 mapOrders = new Map<Id, kugo2p__SalesOrder__c>([select id, Name from kugo2p__SalesOrder__c where id in: setOrderIds]);
+            }
+            
+            if(lstcourseParticipant.size() > 0){
+            for(Course_Participant__c courseParticipant : lstcourseParticipant) {
+                String coaches = '';
+                String payload = '';
+                if(courseParticipant.Coach_1_String_c__c != null) {
+                    coaches += ',{ "name": "'+courseParticipant.Coach_1_String_c__c+'" }';
+                  }
+                if(courseParticipant.Coach_2_String__c != null) {
+                    coaches += ',{ "name": "'+courseParticipant.Coach_2_String__c+'" }';
+                  }
+                if(courseParticipant.Coach_3_String__c != null) {
+                    coaches += ',{ "name": "'+courseParticipant.Coach_3_String__c+'" }';
+                  }
+                HttpRequest request;
+                Http http;
+                request = new HttpRequest();    
+                request.setMethod('POST');
+                request.setEndpoint('callout:Agylia_API/SetUser');
+                request.setHeader('Content-Type','application/json');
+                payload = '{ "params": { "action": "create" }, "profile": {"username":"'+ courseParticipant.JJHWS_Unique_ID__c +'","forename": "'+courseParticipant.First_Name__c +'","surname": "'+courseParticipant.Last_Name__c+'","mail": "'+courseParticipant.Email__c+'","accessCode": "'+courseParticipant.Access_Code__c+'","timezone": "EST"},"groups": [{"name":"'+courseParticipant.Content_Group__c+'" }'+coaches+']}';
+                request.setBody(payload);
+                System.debug('reqBody::::'+request.getBody());
+                request.setTimeout(120000);
+                
+                http = new Http();
+                HttpResponse response = http.send(request);
+                System.debug('response.getStatusCode()::'+response.getStatusCode());
+                if (response.getStatusCode() != 202) {
+                    System.debug('The status code returned was not expected: ' +
+                                 response.getStatusCode() + ' ' + response.getStatus());
+                    lstAPIErrorLog.add(new API_Call_Error_Log__c(API__c = 'AgyliaSetUserAPI', Error_Code__c = string.valueOf(response.getStatusCode()), Error_Message__c = response.getStatus(), Course_Participant_ID__c = courseParticipant.Id, Payload__c = payload));
+                } else {
+                    System.debug(response.getBody());
+                    System.debug('response location header:::::'+response.getHeader('Location'));
+                    userCreationStatus(response.getHeader('Location'), courseParticipant);
+                }                
+            } }
+            if(lstAPIErrorLog.size() > 0) {
+                insert lstAPIErrorLog;
+            }
+        }
+    }
+    
+    
+    private static void enrolLearnerAPICallout(Course_Participant__c courseParticipant){
+        String orderName = '';        
+        if(mapOrders.containsKey(courseParticipant.OrderNumber__c)){
+            orderName = mapOrders.get(courseParticipant.OrderNumber__c).Name;
+        }
+        
+        if(courseParticipant != null){
+            String payload = '';
+            HttpRequest request = new HttpRequest();
+            request.setMethod('POST');
+            request.setEndpoint('callout:Agylia_API/EnrolLearner');
+            request.setHeader('Content-Type','application/json');
+            payload = '{ "params": { "uid": "'+courseParticipant.JJHWS_Unique_ID__c+'","ref": "'+orderName+'" }}';
+            request.setBody(payload);
+            System.debug('reqBody::::'+request.getBody());
+            request.setTimeout(120000);
+            
+            Http http = new Http();
+            HttpResponse response = http.send(request);
+            System.debug('AgyliaEnrolLearnerAPI response.getStatusCode()::'+response.getStatusCode());
+            if (response.getStatusCode() != 200) {
+                System.debug('The status code returned was not expected: ' +
+                             response.getStatusCode() + ' ' + response.getStatus());
+                lstAPIErrorLog.add(new API_Call_Error_Log__c(API__c = 'AgyliaEnrolLearnerAPI', Error_Code__c = string.valueOf(response.getStatusCode()), Error_Message__c = response.getStatus(), Course_Participant_ID__c = courseParticipant.Id, Payload__c = payload));
+            } else {
+                System.debug('AgyliaEnrolLearnerAPI Response Body::::'+response.getBody());
+            }
+        }      
+    }
+    
+    public static void userCreationStatus(String tid, Course_Participant__c courseParticipant){
+        HttpRequest request = new HttpRequest();
+            request.setMethod('GET');
+            request.setEndpoint('callout:Agylia_API/' + tid);
+            request.setTimeout(120000);
+            
+            Http http = new Http();
+            HttpResponse response = http.send(request);
+            System.debug('AgyliaEnrolLearnerAPI response.getStatusCode()::'+response.getStatusCode());
+            if (response.getStatusCode() != 200) {
+                System.debug('The status code returned was not expected: ' +
+                             response.getStatusCode() + ' ' + response.getStatus());
+                lstAPIErrorLog.add(new API_Call_Error_Log__c(API__c = 'AgyliaStatusAPI', Error_Code__c = string.valueOf(response.getStatusCode()), Error_Message__c = response.getStatus(), Course_Participant_ID__c = courseParticipant.Id, Payload__c = tid));
+            } else {
+                System.debug('Status Response Body::::'+response.getBody());
+                String jsonResponse = response.getBody(); 
+                Map<String, Object> results = (Map<String, Object>)JSON.deserializeUntyped(jsonResponse);
+                String status = string.valueOf(results.get('status'));
+                system.debug('status number = ' + status);
+                
+                if(status == '1') {
+                    userCreationStatus(tid, courseParticipant);
+                } else if(status == '2') {            
+                    enrolLearnerAPICallout(courseParticipant);
+                } else {
+                    lstAPIErrorLog.add(new API_Call_Error_Log__c(API__c = 'AgyliaStatusAPI', Error_Code__c = 'status = ' + string.valueOf(status), Error_Message__c = response.getBody(), Course_Participant_ID__c = courseParticipant.Id, Payload__c = tid));                    
+                }
+            }
+    }
+    
+    //For testing User Status, not used    
+    /*                                             
+    public static void getUserStatus(){
+        HttpRequest request = new HttpRequest();
+        request.setMethod('POST');
+        request.setEndpoint('https://api.portal-agylia.com/us/GetUser');
+        request.setHeader('Content-Type','application/json');
+        request.setBody('{ "params": { "uid": "AlexM@cm-group.co.uk"}}');
+        Blob headerValue = Blob.valueOf('jnjhpitest.lumo-reach.com' + ':' + 'MGm!1v5H3aJC!6AbEzHl25wz942Hlfu2S9Gi=D2MYSy');
+        String authorizationHeader = 'Basic ' + EncodingUtil.base64Encode(headerValue);
+        request.setHeader('Authorization', authorizationHeader);
+        request.setTimeout(120000);
+        
+        Http http = new Http();
+        HttpResponse response = http.send(request);
+        System.debug('AgyliaGetUserAPI response.getStatusCode()::'+response.getStatusCode());
+        if (response.getStatusCode() != 200) {
+            System.debug('The status code returned was not expected: ' +
+                         response.getStatusCode() + ' ' + response.getStatus());
+            //insert new API_Call_Error_Log__c(API__c = 'AgyliaEnrolLearnerAPI', Error_Code__c = string.valueOf(response.getStatusCode()), Error_Message__c = response.getStatus());
+        } else {
+            System.debug('Status Response Body::::'+response.getBody());
+        }
+    }*/
+}
