@@ -1,0 +1,125 @@
+Apex Class
+QualtricsExporter
+
+global class QualtricsExporter implements System.Schedulable {
+    global void execute(SchedulableContext sc) {
+        DoExport();
+    }
+    
+    @future(callout=true)
+    public static void DoExport(){
+        List<Exporter__c> exportList = new List<Exporter__c>{};
+        List<Exporter__c> exportUpdateList = new List<Exporter__c>{};
+        List<Messaging.SingleEmailMessage> mails  = new List<Messaging.SingleEmailMessage>();
+        Datetime dt = DateTime.newInstance(Date.today(), Time.newInstance(0, 0, 0, 0));
+        Date d = Date.today();
+        Date firstDate = d.toStartOfMonth();
+        Date lastDay = firstDate.addDays(Date.daysInMonth(d.year(), d.month())-1);
+        
+        system.debug('First Day: ' + firstDate);
+        system.debug('Last Day: ' + lastDay);
+            
+        exportList = [Select Id, Name, Report_ID__c, Attachment_Name__c, Email_Subject__c, Email_Body__c, Email_Recipients__c, Frequency__c, Weekly_Days__c, Monthly_Day__c, Last_Ran__c, Automation_ID__c from Exporter__c];
+        
+        for(Exporter__c e : exportList){
+                   
+            //Determine if Exporter record is scheduled to run today.
+            Boolean process = Test.isRunningTest() ? true : false;
+            
+            //Test for Weekly frequency.
+            process = e.Frequency__c == 'Weekly' && e.Weekly_Days__c.contains(dt.format('EEEE')) ? true : process;
+            
+            //Test for Monthly frequency.
+            process = e.Frequency__c == 'Monthly' && (e.Monthly_Day__c == String.valueOf(d.day()) || e.Monthly_Day__c == 'last' && d == lastDay || lastDay.day() <= Integer.valueOf(e.Monthly_Day__c)) ? true : process;
+                       
+            //Run process if scheduled.
+            if(process){
+                System.debug('Starting message processing for: ' + e.Name);
+                ApexPages.PageReference report = new ApexPages.PageReference('/' + e.Report_ID__c + '?csv=1');
+                Messaging.EmailFileAttachment attachment = new Messaging.EmailFileAttachment();
+                attachment.setFileName(e.Attachment_Name__c);
+                Blob content = Test.isRunningTest() ? Blob.valueOf('UNIT.TEST') : report.getContent();
+                attachment.setBody(content);
+                attachment.setContentType('text/csv');
+                Messaging.SingleEmailMessage message = new Messaging.SingleEmailMessage();
+                message.setFileAttachments(new Messaging.EmailFileAttachment[] {attachment});
+                message.setSubject(e.Email_Subject__c);
+                message.setPlainTextBody(e.Email_Body__c);
+                String[] emailRecipients = e.Email_Recipients__c.split(',');
+                message.setToAddresses(emailRecipients);
+                mails.add(message);
+                System.debug('Completed message processing for: ' + e.Name);
+                
+                //Update Last Ran date and add to update list.
+                e.Last_Ran__c = System.now();
+                exportUpdateList.add(e);
+                
+                Blob file_body;
+                if(Test.isRunningTest()){
+                    file_body = blob.valueOf('Unit.Test');
+                }else{
+                    system.debug('e.Report_ID__c = '+ e.Report_ID__c);
+                    file_body = new PageReference('/'+e.Report_ID__c+'?csv=1').getContent();
+                }
+                String filename = e.Attachment_Name__c;
+                String boundary = '----------------------------741e90d31eff';
+                String header = '--'+boundary+'\r\nContent-Disposition: form-data; name="file"; filename="'+filename+'"\r\nContent-Type: text/csv'; 
+                String footer = '\r\n--'+boundary+'--';              
+                String headerEncoded = EncodingUtil.base64Encode(Blob.valueOf(header+'\r\n\r\n'));
+                while(headerEncoded.endsWith('='))
+                {
+                    header+=' ';
+                    headerEncoded = EncodingUtil.base64Encode(Blob.valueOf(header+'\r\n\r\n'));
+                }
+                String bodyEncoded = EncodingUtil.base64Encode(file_body);
+                String footerEncoded = EncodingUtil.base64Encode(Blob.valueOf(footer));
+                Blob bodyBlob = null;
+                String last4Bytes = bodyEncoded.substring(bodyEncoded.length()-4,bodyEncoded.length());
+                if(last4Bytes.endsWith('='))
+                {
+                    Blob decoded4Bytes = EncodingUtil.base64Decode(last4Bytes);
+                    HttpRequest tmp = new HttpRequest();
+                    tmp.setBodyAsBlob(decoded4Bytes);
+                    String last4BytesFooter = tmp.getBody()+footer;   
+                    bodyBlob = EncodingUtil.base64Decode(headerEncoded+bodyEncoded.substring(0,bodyEncoded.length()-4)+EncodingUtil.base64Encode(Blob.valueOf(last4BytesFooter)));
+                }
+                else
+                {
+                    bodyBlob = EncodingUtil.base64Decode(headerEncoded+bodyEncoded+footerEncoded);
+                }
+                HttpRequest req = new HttpRequest();
+                String reqEndPoint = 'https://qunip48d9pjhj3wh.eu.qualtrics.com/automations-file-service/automations/' +e.Automation_ID__c+'/files';
+                req.setHeader('Content-Type','multipart/form-data; boundary='+boundary);
+                req.setMethod('POST');
+                req.setEndpoint(reqEndPoint);
+                //req.setHeader('X-API-TOKEN','/tbiaW4Q/6F8K;n6c9qgWqeknoqueTJHUpRsE8kPUqH');
+                String authorizationHeader = 'tbiaW4Q6F8Kn6c9qgWqeknoqueTJHUpRsE8kPUqH';
+                //    EncodingUtil.base64Encode(headerValue);
+                req.setHeader('X-API-TOKEN', authorizationHeader);   
+
+                req.setBodyAsBlob(bodyBlob);
+                req.setTimeout(120000);
+
+                Http http = new Http();
+                HTTPResponse response = http.send(req);               
+
+                if (response.getStatusCode() != 200) {
+                    System.debug('The status code returned was not expected: ' +
+                    response.getStatusCode() + ' ' + response.getStatus());
+                    insert new API_Call_Error_Log__c(API__c = 'QualtricsExporter', Error_Code__c = string.valueOf(response.getStatusCode()), Error_Message__c = response.getStatus());
+                } else {
+                    System.debug(response.getBody());
+                }
+            }
+         
+        }
+        
+        //Send the email messages all at once to avoid limits.
+        Messaging.sendEmail(mails);
+        System.debug('Send emails.');
+        
+        //Update Export record with Last Ran date.
+        update exportUpdateList;
+        
+    }
+}
