@@ -1,0 +1,56 @@
+Apex Class
+TestAgyliaCallout
+
+@isTest
+public class TestAgyliaCallout {
+
+    @isTest static void testAgyliaSetUser() {
+        
+        Contact participant = new Contact(FirstName = 'Ship', LastName = 'Shipping', Email = 'ship@test.com', Qualtrics_Type__c = 'HPI Participant');
+        insert participant;
+
+        Course_Participant__c courseParticipant = new Course_Participant__c(Participant__c = participant.id, JJHWS_Unique_ID__c = 'ship@test.com', Timezone__c = 'America/New_York', 
+                                                                            Access_Code__c = 'SIT2018'); 
+        
+                                                     
+        // Set mock callout class 
+        Map<String, String> responseHeadersSetUser = new Map<String, String>();
+        responseHeadersSetUser.put('Location', '/status/123');
+
+        SingleRequestMock fakeSetUserAPI = new SingleRequestMock(202,
+                                                         'Location',
+                                                         '[{"Location": "status/123"}]',
+                                                         responseHeadersSetUser);
+
+        SingleRequestMock fakeUserStatusAPI = new SingleRequestMock(200,
+                                                  'Complete',
+                                                  '{"message":"example","status":2,"tid":"123"}',
+                                                   null);
+        SingleRequestMock fakeEnrolLearnerAPI = new SingleRequestMock(200,
+                                                  'Complete',
+                                                  'Your request completed successfully',
+                                                   null);
+
+        Map<String, HttpCalloutMock> endpoint2TestResp =
+                                   new Map<String,HttpCalloutMock>();
+        endpoint2TestResp.put('callout:Agylia_API/SetUser',fakeSetUserAPI);
+        endpoint2TestResp.put('callout:Agylia_API//status/123',fakeUserStatusAPI);
+        endpoint2TestResp.put('callout:Agylia_API/EnrolLearner',fakeEnrolLearnerAPI);
+
+        HttpCalloutMock multiCalloutMock =
+                                   new MultiRequestMock(endpoint2TestResp);
+
+        Test.setMock(HttpCalloutMock.class, multiCalloutMock);
+        
+        // Call method to test.
+        // This causes a fake response to be sent
+        // from the class that implements HttpCalloutMock. 
+        Set<Id> setCPIds = new Set<Id>();
+        setCPIds.add(courseParticipant.id);
+        test.startTest();
+        insert courseParticipant; 
+        //AgyliaCallout.createUser(setCPIds);
+        test.stopTest();
+        
+    }
+}
